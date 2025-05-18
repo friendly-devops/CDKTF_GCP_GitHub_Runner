@@ -1,0 +1,99 @@
+name: "Deployment Workflow"
+
+on:
+  workflow_call:
+    inputs:
+      deploymentobject:
+        description: Deploy or Destroy infrastructure
+        required: true
+        type: string
+      deploymenttype:
+        description: Deploy or Destroy infrastructure
+        required: true
+        type: string
+      resourceName:
+        required: true
+        type: string
+      projectName:
+        required: true
+        type: string
+    secrets:
+      GCP_SA_EMAIL:
+        required: true
+      GCP_WIP:
+        required: true
+
+  workflow_dispatch:
+    inputs:
+      deploymentobject:
+        description: Deploy or Destroy infrastructure
+        required: true
+        default: "codebuild"
+        type: choice
+        options:
+          - "compute-engine"
+          - "cloud-run"
+      resourceName:
+        required: true
+        default: "runner"
+        type: string
+      projectName:
+        required: true
+        default: "github-group"
+        type: string
+      deploymenttype:
+        description: Deploy or Destroy infrastructure
+        required: true
+        default: "deploy"
+        type: choice
+        options:
+          - "deploy"
+          - "destroy"
+    secrets:
+      GCP_SA_EMAIL:
+        required: true
+      GCP_WIP:
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  tf_deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18.12.0
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+      - name: install dependencies
+        run: |
+          npm install --force
+          npm install -g cdktf-cli@latest --force
+          cdktf get
+      - name: Config credentials
+        uses: 'google-GitHub-actions/auth@v1'
+        with:
+          create_credentials_file: true
+          workload_identity_provider: ${{ secrets.GCP_WIP }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+      - name: CDKTF Deployment
+        run: |
+          cdktf --app "npx ts-node ${{ inputs.deploymentobject }}-deployment.ts" synth
+          cdktf --app "npx ts-node ${{ inputs.deploymentobject }}-deployment.ts" ${{ inputs.deploymenttype }} "*" --auto-approve
+        env:
+          STATE_BUCKET: ${{ secrets.GCP_STATE_BUCKET }}
+          COMPUTE_E_ACCOUNT: ${{ secrets.COMPUTE_E_ACCOUNT }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+          GCP_OWNER: ${{ secrets.GCP_OWNER }}
+          REPOSITORY: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          RESOURCE_NAME: ${{ inputs.resourceName }}
+          RESOURCE_PROJECT: ${{ inputs.projectName }}
+          PROJECT: ${{ secrets.GCP_PROJECT }}

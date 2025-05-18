@@ -1,0 +1,86 @@
+name: CloudRun Deployment
+on: 
+  workflow_dispatch:
+    inputs:
+      deploymenttype:
+        description: Deploy or Destroy infrastructure
+        required: true
+        default: "deploy"
+        type: choice
+        options:
+          - "deploy"
+          - "destroy"
+      resourceName:
+        required: true
+        default: "runner"
+      projectName:
+        required: true
+        default: "github-group"
+    secrets:
+      GCP_SA_EMAIL:
+        required: true
+      GCP_WIP:
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  container-image-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        if: ${{ github.event.inputs.deploymenttype == 'deploy' }}
+        uses: actions/checkout@v2
+      - name: Config credentials
+        uses: 'google-GitHub-actions/auth@v1'
+        with:
+          create_credentials_file: true
+          workload_identity_provider: ${{ secrets.GCP_WIP }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v2'
+        with:
+          version: '>= 363.0.0'
+      - name: Deploy GitHub-Runner Image
+        if: ${{ github.event.inputs.deploymenttype == 'deploy' }}
+        run: |
+          cd docker
+          gcloud auth configure-docker us-central1-docker.pkg.dev
+
+          sed -ie "s/{NAME}/$RESOURCE_NAME/g" entrypoint.sh
+          sed -ie "s/{PROJECT}/$RESOURCE_PROJECT/g" entrypoint.sh
+          sed -ie "s/{PROJECT}/$RESOURCE_PROJECT/g" entrypoint.sh
+          sed -ie "s/{REPO_OWNER}/$REPO_OWNER/g" entrypoint.sh
+          sed -ie "s/{GH_TOKEN}/$GH_TOKEN/g" entrypoint.sh
+          ###### To deploy to personal account uncomment the lower line ####
+          #sed -ie "s/{REPOSITORY}/$REPOSITORY/g" entrypoint.sh
+
+          docker build -t github-runner:latest . 
+
+          docker tag github-runner:latest us-central1-docker.pkg.dev/$PROJECT/github-runner/github-runner:latest
+          docker push us-central1-docker.pkg.dev/$PROJECT/github-runner/github-runner:latest
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          RESOURCE_NAME: ${{ inputs.resourceName }}
+          RESOURCE_PROJECT: ${{ inputs.projectName }}
+          PROJECT: ${{ secrets.GCP_PROJECT }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      - name: Destroy GitHub-Runner Image
+        if: ${{ github.event.inputs.deploymenttype == 'destroy' }}
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev
+          gcloud container images delete us-central1-docker.pkg.dev/$PROJECT/github-runner/github-runner:latest --quiet
+        env:
+          PROJECT: ${{ secrets.GCP_PROJECT }}
+  deploy-cluster:
+    needs: container-image-push
+    uses: ./.github/workflows/deployment-workflow.yml
+    with:
+      resourceName: "${{ inputs.resourceName }}"
+      projectName: "${{ inputs.projectName }}"
+      deploymenttype: "${{ inputs.deploymenttype }}"
+      deploymentobject: "cloud-run"
+    secrets: inherit
